@@ -880,7 +880,11 @@
 
     <script>
       // ═══════════════════════════════════════════════════════
-      //  CONFIG — thay YOUR_GOOGLE_CLIENT_ID_HERE bằng Client ID
+      //  CONFIG
+      //  ⚠️  Client ID này chỉ hoạt động trên domain đã đăng ký
+      //     trong Google Cloud Console > Authorized JavaScript origins
+      //     Đăng ký: https://tuan-uit.github.io
+      //     và: http://localhost (để test local)
       // ═══════════════════════════════════════════════════════
       const GAPI_CLIENT_ID =
         "214566412544-vn4darjbmf81nqi9o3u3ec2f92bm6hmn.apps.googleusercontent.com";
@@ -934,21 +938,25 @@
       // ═══════════════════════════════════════════════════════
       function initOAuthFlow() {
         if (
-          GAPI_CLIENT_ID ===
-          "214566412544-vn4darjbmf81nqi9o3u3ec2f92bm6hmn.apps.googleusercontent.com"
+          !GAPI_CLIENT_ID ||
+          GAPI_CLIENT_ID === "YOUR_GOOGLE_CLIENT_ID_HERE"
         ) {
           showToast("Cần cài Google Client ID trước", "error");
-          openAuthSheet();
+          return;
+        }
+        if (!window.google || !window.google.accounts) {
+          showToast("Google SDK chưa tải xong, thử lại sau", "error");
           return;
         }
         closeSheets();
         const client = google.accounts.oauth2.initTokenClient({
           client_id: GAPI_CLIENT_ID,
-          scope: "https://www.googleapis.com/auth/drive.appdata",
+          scope:
+            "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata",
           callback: (res) => {
             if (res.error) {
               setSyncState("error", "Lỗi");
-              showToast("Đăng nhập thất bại", "error");
+              showToast("Đăng nhập thất bại: " + res.error, "error");
               return;
             }
             accessToken = res.access_token;
@@ -1113,7 +1121,11 @@
       }
 
       function handleSyncClick() {
-        accessToken ? syncToDrive() : initOAuthFlow();
+        if (accessToken) {
+          syncToDrive();
+        } else {
+          openAuthSheet();
+        }
       }
 
       // ═══════════════════════════════════════════════════════
@@ -1389,20 +1401,6 @@
       }
 
       function openAuthSheet() {
-        if (
-          GAPI_CLIENT_ID !==
-            "214566412544-vn4darjbmf81nqi9o3u3ec2f92bm6hmn.apps.googleusercontent.com" &&
-          window.google
-        ) {
-          google.accounts.id.renderButton(
-            document.getElementById("g_id_signin_btn"),
-            {
-              theme: "filled_black",
-              size: "large",
-              locale: "vi",
-            },
-          );
-        }
         document.getElementById("overlay").classList.add("open");
         document.getElementById("authSheet").classList.add("open");
       }
