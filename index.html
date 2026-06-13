@@ -838,8 +838,7 @@
       // ═══════════════════════════════════════════════════════
       //  CONFIG — thay YOUR_GOOGLE_CLIENT_ID_HERE bằng Client ID
       // ═══════════════════════════════════════════════════════
-      const GAPI_CLIENT_ID =
-        "214566412544-vn4darjbmf81nqi9o3u3ec2f92bm6hmn.apps.googleusercontent.com";
+      const GAPI_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID_HERE";
       const DRIVE_FILE_NAME = "chi-tieu-data.json";
 
       // ═══════════════════════════════════════════════════════
@@ -924,50 +923,112 @@
       }
 
       async function driveUpload(content) {
-        const boundary = "chiti3u_b0undary";
-        const meta = driveFileId
-          ? {}
-          : { name: DRIVE_FILE_NAME, parents: ["appDataFolder"] };
-        const body = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(content)}\r\n--${boundary}--`;
-        const url = driveFileId
-          ? `https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=multipart`
-          : "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart";
-        const res = await fetch(url, {
-          method: driveFileId ? "PATCH" : "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": `multipart/related; boundary=${boundary}`,
-          },
-          body,
-        });
-        if (!res.ok) throw new Error(res.status);
-        return res.json();
+        const jsonStr = JSON.stringify(content);
+        if (driveFileId) {
+          // Update existing file
+          const res = await fetch(
+            `https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`,
+            {
+              method: "PATCH",
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: jsonStr,
+            },
+          );
+          if (!res.ok) {
+            const e = await res.text();
+            throw new Error(e);
+          }
+          return res.json();
+        } else {
+          // Step 1: create file metadata
+          const metaRes = await fetch(
+            "https://www.googleapis.com/drive/v3/files",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                name: DRIVE_FILE_NAME,
+                parents: ["appDataFolder"],
+              }),
+            },
+          );
+          if (!metaRes.ok) {
+            const e = await metaRes.text();
+            throw new Error(e);
+          }
+          const meta = await metaRes.json();
+          driveFileId = meta.id;
+          // Step 2: upload content
+          const contentRes = await fetch(
+            `https://www.googleapis.com/upload/drive/v3/files/${driveFileId}?uploadType=media`,
+            {
+              method: "PATCH",
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: jsonStr,
+            },
+          );
+          if (!contentRes.ok) {
+            const e = await contentRes.text();
+            throw new Error(e);
+          }
+          return contentRes.json();
+        }
       }
 
       async function syncFromDrive() {
         try {
+          // Check if file exists on Drive
           const list = await driveRequest(
             "GET",
-            `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='${DRIVE_FILE_NAME}'&fields=files(id)`,
+            `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D'${DRIVE_FILE_NAME}'&fields=files(id)`,
           );
+
           if (list.files && list.files.length > 0) {
             driveFileId = list.files[0].id;
+            // Download Drive data
             const res = await fetch(
               `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
               { headers: { Authorization: `Bearer ${accessToken}` } },
             );
+            if (!res.ok) throw new Error(res.status);
             const data = await res.json();
-            if (Array.isArray(data.expenses)) {
-              expenses = data.expenses;
+
+            if (Array.isArray(data.expenses) && data.expenses.length > 0) {
+              // Merge Drive + local, deduplicate by id
+              const merged = [...data.expenses];
+              expenses.forEach((local) => {
+                if (!merged.find((d) => d.id === local.id)) merged.push(local);
+              });
+              merged.sort((a, b) => b.id - a.id);
+              expenses = merged;
               localStorage.setItem("expenses", JSON.stringify(expenses));
               renderAll();
+              // Push merged result back to Drive
+              await driveUpload({ expenses });
+            } else {
+              // Drive file empty — push local data up
+              await driveUpload({ expenses });
             }
+          } else {
+            // No file on Drive yet — create and upload
+            await driveUpload({ expenses });
           }
+
           setSyncState("synced", "Đã lưu");
           showToast("☁️ Đã đồng bộ", "success");
-        } catch {
+        } catch (e) {
+          console.error("syncFromDrive error:", e);
           setSyncState("error", "Lỗi");
-          showToast("Lỗi tải dữ liệu", "error");
+          showToast("Lỗi đồng bộ: " + e.message, "error");
         }
       }
 
@@ -978,13 +1039,13 @@
         }
         setSyncState("syncing", "Đang lưu…");
         try {
-          const r = await driveUpload({ expenses });
-          driveFileId = r.id;
+          await driveUpload({ expenses });
           setSyncState("synced", "Đã lưu");
           showToast("☁️ Đã lưu lên Drive", "success");
-        } catch {
+        } catch (e) {
+          console.error("syncToDrive error:", e);
           setSyncState("error", "Lỗi");
-          showToast("Không thể lưu", "error");
+          showToast("Không thể lưu: " + e.message, "error");
         }
       }
 
