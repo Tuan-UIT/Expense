@@ -606,10 +606,11 @@
       .auth-sheet {
         text-align: center;
         padding-top: 8px;
+        padding-bottom: 16px;
       }
       .auth-sheet .logo {
-        font-size: 48px;
-        margin-bottom: 12px;
+        font-size: 40px;
+        margin-bottom: 10px;
       }
       .auth-sheet h3 {
         font-size: 17px;
@@ -625,6 +626,29 @@
       #g_id_signin_btn {
         display: flex;
         justify-content: center;
+        margin-bottom: 8px;
+      }
+      .manual-login-btn {
+        width: 100%;
+        background: #4285f4;
+        border: none;
+        border-radius: 12px;
+        color: #fff;
+        font-size: 15px;
+        font-weight: 600;
+        padding: 15px;
+        cursor: pointer;
+        font-family: inherit;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+      }
+      .manual-login-btn:active {
+        opacity: 0.85;
       }
 
       /* ── TOAST ─────────────────────────────────────── */
@@ -827,7 +851,27 @@
           Đăng nhập để lưu dữ liệu lên Google Drive.<br />Dữ liệu chỉ lưu trong
           tài khoản của bạn.
         </p>
-        <div id="g_id_signin_btn"></div>
+        <button class="manual-login-btn" onclick="startLogin()">
+          <svg width="18" height="18" viewBox="0 0 18 18">
+            <path
+              fill="#fff"
+              d="M9 3.48c1.69 0 2.83.73 3.48 1.34l2.54-2.48C13.46.89 11.43 0 9 0 5.48 0 2.44 2.02.96 4.96l2.91 2.26C4.6 5.05 6.62 3.48 9 3.48z"
+            />
+            <path
+              fill="#fff"
+              d="M17.64 9.2c0-.74-.06-1.28-.19-1.84H9v3.34h4.96c-.1.83-.64 2.08-1.84 2.92l2.84 2.2c1.7-1.57 2.68-3.88 2.68-6.62z"
+            />
+            <path
+              fill="#fff"
+              d="M3.88 10.78A5.54 5.54 0 0 1 3.58 9c0-.62.11-1.22.29-1.78L.96 4.96A9 9 0 0 0 0 9c0 1.45.35 2.82.96 4.04l2.92-2.26z"
+            />
+            <path
+              fill="#fff"
+              d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.84-2.2c-.76.53-1.78.9-3.12.9-2.38 0-4.4-1.57-5.12-3.74L.97 13.04C2.45 15.98 5.48 18 9 18z"
+            />
+          </svg>
+          Đăng nhập với Google
+        </button>
       </div>
     </div>
 
@@ -893,6 +937,7 @@
           openAuthSheet();
           return;
         }
+        closeSheets();
         const client = google.accounts.oauth2.initTokenClient({
           client_id: GAPI_CLIENT_ID,
           scope: "https://www.googleapis.com/auth/drive.appdata",
@@ -908,6 +953,10 @@
           },
         });
         client.requestAccessToken();
+      }
+
+      function startLogin() {
+        initOAuthFlow();
       }
 
       // ═══════════════════════════════════════════════════════
