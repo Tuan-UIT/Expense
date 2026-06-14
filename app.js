@@ -232,6 +232,7 @@ function setSyncState(state, label) {
   const btn  = document.getElementById("syncBtn");
   const icon = document.getElementById("syncIcon");
   const lbl  = document.getElementById("syncLabel");
+  if (!btn || !icon || !lbl) return;
   btn.className = `sync-btn ${state}`;
   lbl.textContent = label;
   icon.textContent = { synced: "✅", syncing: "🔄", error: "❌" }[state] || "☁️";
