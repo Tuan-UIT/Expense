@@ -50,6 +50,7 @@ window.addEventListener("load", () => {
   renderAll();
   setupAmountSuggestions("inputAmount", "suggestions");
   setupAmountSuggestions("inputIncomeAmount", "incomeSuggestions");
+  initTokenClient(); // Khởi tạo sớm nếu SDK đã load kịp
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -126,17 +127,15 @@ function setupAmountSuggestions(inputId, suggestionsId) {
 // ═══════════════════════════════════════════════════════════
 //  GOOGLE OAUTH
 // ═══════════════════════════════════════════════════════════
-function initOAuthFlow() {
-  if (!GAPI_CLIENT_ID || GAPI_CLIENT_ID === "YOUR_GOOGLE_CLIENT_ID_HERE") {
-    showToast("Cần cài Google Client ID trước", "error");
-    return;
-  }
-  if (!window.google || !window.google.accounts) {
-    showToast("Google SDK chưa tải xong, thử lại sau", "error");
-    return;
-  }
-  closeSheets();
-  const client = google.accounts.oauth2.initTokenClient({
+let _tokenClient = null;
+let _sdkReady = false;
+
+// Gọi sớm từ onload để khởi tạo client trước khi user nhấn nút
+function initTokenClient() {
+  if (!GAPI_CLIENT_ID || GAPI_CLIENT_ID === "YOUR_GOOGLE_CLIENT_ID_HERE") return;
+  if (!window.google || !window.google.accounts) return;
+  if (_tokenClient) return;
+  _tokenClient = google.accounts.oauth2.initTokenClient({
     client_id: GAPI_CLIENT_ID,
     scope: "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata",
     callback: (res) => {
@@ -146,13 +145,30 @@ function initOAuthFlow() {
         return;
       }
       accessToken = res.access_token;
-      // Token hết hạn sau ~1h, tự làm mới khi sync
       setTimeout(() => { accessToken = null; }, 3500 * 1000);
       setSyncState("syncing", "Đang tải…");
       syncFromDrive();
     },
   });
-  client.requestAccessToken();
+  _sdkReady = true;
+}
+
+// SDK có thể load sau window.load, dùng callback này để khởi tạo
+window.onGoogleLibraryLoad = function () {
+  initTokenClient();
+};
+
+function initOAuthFlow() {
+  // Thử khởi tạo lại nếu chưa có (phòng trường hợp SDK load trễ)
+  if (!_tokenClient) initTokenClient();
+
+  if (!_tokenClient) {
+    showToast("Không tải được Google SDK. Kiểm tra kết nối mạng.", "error");
+    return;
+  }
+  // requestAccessToken phải được gọi trực tiếp trong user gesture (quan trọng với iOS Safari)
+  closeSheets();
+  _tokenClient.requestAccessToken();
 }
 
 function startLogin() { initOAuthFlow(); }

@@ -16,7 +16,14 @@
     <title>💸 Chi Tiêu</title>
     <link rel="manifest" href="manifest.json" />
     <link rel="stylesheet" href="style.css" />
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    <script
+      src="https://accounts.google.com/gsi/client"
+      async
+      defer
+      onload="
+        if (typeof onGoogleLibraryLoad === 'function') onGoogleLibraryLoad();
+      "
+    ></script>
   </head>
   <body>
     <!-- HEADER -->
@@ -198,7 +205,9 @@
         <input type="date" id="inputDate" />
       </div>
 
-      <button class="add-btn" id="addSubmitBtn" onclick="addExpense()">Thêm chi tiêu</button>
+      <button class="add-btn" id="addSubmitBtn" onclick="addExpense()">
+        Thêm chi tiêu
+      </button>
     </div>
 
     <!-- ADD INCOME SHEET -->
