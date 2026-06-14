@@ -540,27 +540,31 @@ function renderList() {
         : `<span style="color:var(--red)">-${fmt(netExp)}</span>`;
       return `<div class="day-group">
         <div class="day-label"><span>${fmtDate(date)}</span><span>${daySummary}</span></div>
-        ${items.map(e => e.kind === "income" ? `
+        ${items.map(e => {
+          const id  = parseInt(e.id, 10);  // đảm bảo luôn là số nguyên trong onclick
+          const cat = escHtml(e.category);
+          return e.kind === "income" ? `
           <div class="expense-item income-item">
             <span class="exp-icon">${catEmoji(e.category, INCOME_CATEGORIES)}</span>
             <div class="exp-info">
               <div class="exp-note">${escHtml(e.note)}</div>
-              <div class="exp-meta">${e.category}</div>
+              <div class="exp-meta">${cat}</div>
             </div>
             <span class="exp-amount income-amt">+${fmtExact(e.amount)}</span>
-            <button class="edit-btn" onclick="editIncome(${e.id})" aria-label="Sửa">✏️</button>
-            <button class="del-btn" onclick="deleteIncome(${e.id})" aria-label="Xóa">✕</button>
+            <button class="edit-btn" onclick="editIncome(${id})" aria-label="Sửa">✏️</button>
+            <button class="del-btn" onclick="deleteIncome(${id})" aria-label="Xóa">✕</button>
           </div>` : `
           <div class="expense-item">
             <span class="exp-icon">${catEmoji(e.category)}</span>
             <div class="exp-info">
               <div class="exp-note">${escHtml(e.note)}</div>
-              <div class="exp-meta">${e.category}</div>
+              <div class="exp-meta">${cat}</div>
             </div>
             <span class="exp-amount">-${fmtExact(e.amount)}</span>
-            <button class="edit-btn" onclick="editExpense(${e.id})" aria-label="Sửa">✏️</button>
-            <button class="del-btn" onclick="deleteExpense(${e.id})" aria-label="Xóa">✕</button>
-          </div>`).join("")}
+            <button class="edit-btn" onclick="editExpense(${id})" aria-label="Sửa">✏️</button>
+            <button class="del-btn" onclick="deleteExpense(${id})" aria-label="Xóa">✕</button>
+          </div>`;
+        }).join("")}
       </div>`;
     }).join("");
 }
@@ -709,7 +713,7 @@ function renderStats() {
         ? '<p style="color:var(--muted);font-size:13px">Chưa có dữ liệu</p>'
         : sorted.map(([cat, amt]) => `
           <div class="stat-row">
-            <div class="sr-left">${catEmoji(cat)} ${cat}</div>
+            <div class="sr-left">${catEmoji(cat)} ${escHtml(cat)}</div>
             <div class="sr-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
               <span>${fmt(amt)}</span>
               <span style="font-size:11px;color:var(--muted)">${grand > 0 ? ((amt/grand)*100).toFixed(0) : 0}%</span>
@@ -734,7 +738,7 @@ function renderStats() {
       ${topCat ? `
       <div class="stat-row">
         <div class="sr-left">🏆 Chi nhiều nhất</div>
-        <div class="sr-right" style="color:var(--purple)">${topCat[0].split(" ").slice(1).join(" ")}</div>
+        <div class="sr-right" style="color:var(--purple)">${escHtml(topCat[0].split(" ").slice(1).join(" "))}</div>
       </div>` : ""}
       <div class="stat-row">
         <div class="sr-left">📈 TB/ngày</div>
