@@ -317,15 +317,16 @@ body {
   color: var(--green);
 }
 
+.edit-btn,
 .del-btn {
   background: none;
   border: none;
   color: var(--muted);
-  font-size: 16px;
+  font-size: 15px;
   cursor: pointer;
-  padding: 10px;
+  padding: 8px;
   flex-shrink: 0;
-  min-width: 44px;
+  min-width: 36px;
   min-height: 44px;
   display: flex;
   align-items: center;
@@ -333,6 +334,10 @@ body {
   border-radius: 8px;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+}
+.edit-btn:active {
+  color: var(--blue);
+  background: rgba(88, 166, 255, 0.1);
 }
 .del-btn:active {
   color: var(--red);
@@ -671,10 +676,31 @@ body {
 .page {
   padding: 0 16px;
 }
+.stats-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0 12px;
+}
 .stats-title {
   font-size: 16px;
   font-weight: 700;
-  padding: 16px 0 12px;
+}
+.export-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.export-btn:active {
+  color: var(--blue);
+  border-color: var(--blue);
 }
 .stat-block {
   background: var(--card);

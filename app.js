@@ -1,7 +1,5 @@
 // ═══════════════════════════════════════════════════════════
 //  CONFIG
-//  ⚠️  Client ID chỉ hoạt động trên domain đã đăng ký trong
-//     Google Cloud Console > Authorized JavaScript origins
 // ═══════════════════════════════════════════════════════════
 const GAPI_CLIENT_ID =
   "214566412544-vn4darjbmf81nqi9o3u3ec2f92bm6hmn.apps.googleusercontent.com";
@@ -27,18 +25,19 @@ const INCOME_CATEGORIES = [
   { key: "💵 Khác",     emoji: "💵", label: "Khác",     color: "#8B949E" },
 ];
 
-const catColor  = (k, list = CATEGORIES) => (list.find(c => c.key === k) || {}).color || "#8B949E";
-const catEmoji  = (k, list = CATEGORIES) => (list.find(c => c.key === k) || {}).emoji || "📦";
+const catColor = (k, list = CATEGORIES) => (list.find(c => c.key === k) || {}).color || "#8B949E";
+const catEmoji = (k, list = CATEGORIES) => (list.find(c => c.key === k) || {}).emoji || "📦";
 
 // ═══════════════════════════════════════════════════════════
 //  STATE
 // ═══════════════════════════════════════════════════════════
-let expenses    = JSON.parse(localStorage.getItem("expenses") || "[]");
-let incomes     = JSON.parse(localStorage.getItem("incomes")  || "[]");
+let expenses     = JSON.parse(localStorage.getItem("expenses") || "[]");
+let incomes      = JSON.parse(localStorage.getItem("incomes")  || "[]");
 let activeFilter = "All";
 let accessToken  = null;
 let driveFileId  = null;
 let fabOpen      = false;
+let _editingId   = null;  // id đang sửa, null = đang thêm mới
 
 // ═══════════════════════════════════════════════════════════
 //  INIT
@@ -54,6 +53,33 @@ window.addEventListener("load", () => {
 });
 
 // ═══════════════════════════════════════════════════════════
+//  FORMAT
+// ═══════════════════════════════════════════════════════════
+function fmt(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M₫";
+  if (n >= 1_000)     return Math.round(n / 1_000) + "K₫";
+  return n.toLocaleString("vi-VN") + "₫";
+}
+
+function fmtExact(n) {
+  return n.toLocaleString("vi-VN") + "₫";
+}
+
+function fmtSuggest(n) {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1) + "M₫";
+  if (n >= 1_000)     return (n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1) + "K₫";
+  return n.toLocaleString("vi-VN") + "₫";
+}
+
+const todayStr     = () => new Date().toISOString().split("T")[0];
+const thisMonthStr = () => todayStr().slice(0, 7);
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+// ═══════════════════════════════════════════════════════════
 //  SMART VND SUGGESTIONS
 // ═══════════════════════════════════════════════════════════
 function setupAmountSuggestions(inputId, suggestionsId) {
@@ -67,8 +93,6 @@ function setupAmountSuggestions(inputId, suggestionsId) {
     if (!raw || raw === "0") return;
 
     const num = parseInt(raw, 10);
-    // Generate candidates: num * 1k, num * 10k, num * 100k, num * 1M
-    // Only show if candidate > num (avoids suggesting the same value)
     const multipliers = [1_000, 10_000, 100_000, 1_000_000];
     const seen = new Set();
     const chips = [];
@@ -76,7 +100,7 @@ function setupAmountSuggestions(inputId, suggestionsId) {
     for (const m of multipliers) {
       const val = num * m;
       if (val <= num) continue;
-      if (val > 500_000_000) continue; // cap at 500M₫
+      if (val > 500_000_000) continue;
       const key = String(val);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -97,12 +121,6 @@ function setupAmountSuggestions(inputId, suggestionsId) {
       box.appendChild(btn);
     });
   });
-}
-
-function fmtSuggest(n) {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1) + "M₫";
-  if (n >= 1_000)     return (n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1) + "K₫";
-  return n.toLocaleString("vi-VN") + "₫";
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -128,6 +146,8 @@ function initOAuthFlow() {
         return;
       }
       accessToken = res.access_token;
+      // Token hết hạn sau ~1h, tự làm mới khi sync
+      setTimeout(() => { accessToken = null; }, 3500 * 1000);
       setSyncState("syncing", "Đang tải…");
       syncFromDrive();
     },
@@ -138,7 +158,7 @@ function initOAuthFlow() {
 function startLogin() { initOAuthFlow(); }
 
 // ═══════════════════════════════════════════════════════════
-//  GOOGLE DRIVE
+//  GOOGLE DRIVE — SYNC với soft-delete
 // ═══════════════════════════════════════════════════════════
 async function driveRequest(method, url) {
   const res = await fetch(url, { method, headers: { Authorization: `Bearer ${accessToken}` } });
@@ -172,6 +192,19 @@ async function driveUpload(content) {
   return contentRes.json();
 }
 
+// Merge theo last-write-wins từng record, giữ deletedAt để xóa lan truyền
+function mergeRecords(remote, local) {
+  const map = new Map();
+  // Ưu tiên remote trước, rồi local override nếu updatedAt mới hơn
+  [...remote, ...local].forEach(item => {
+    const existing = map.get(item.id);
+    if (!existing || (item.updatedAt || 0) >= (existing.updatedAt || 0)) {
+      map.set(item.id, item);
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => b.id - a.id);
+}
+
 async function syncFromDrive() {
   try {
     const list = await driveRequest(
@@ -187,20 +220,13 @@ async function syncFromDrive() {
       if (!res.ok) throw new Error(res.status);
       const data = await res.json();
 
-      if (Array.isArray(data.expenses) && data.expenses.length > 0) {
-        const merged = [...data.expenses];
-        expenses.forEach(local => { if (!merged.find(d => d.id === local.id)) merged.push(local); });
-        merged.sort((a, b) => b.id - a.id);
-        expenses = merged;
+      if (Array.isArray(data.expenses)) {
+        expenses = mergeRecords(data.expenses, expenses);
       }
-      if (Array.isArray(data.incomes) && data.incomes.length > 0) {
-        const merged = [...data.incomes];
-        incomes.forEach(local => { if (!merged.find(d => d.id === local.id)) merged.push(local); });
-        merged.sort((a, b) => b.id - a.id);
-        incomes = merged;
+      if (Array.isArray(data.incomes)) {
+        incomes = mergeRecords(data.incomes, incomes);
       }
-      localStorage.setItem("expenses", JSON.stringify(expenses));
-      localStorage.setItem("incomes",  JSON.stringify(incomes));
+      saveLocal();
       renderAll();
       await driveUpload({ expenses, incomes });
     } else {
@@ -243,6 +269,11 @@ function handleSyncClick() {
   else openAuthSheet();
 }
 
+function saveLocal() {
+  localStorage.setItem("expenses", JSON.stringify(expenses));
+  localStorage.setItem("incomes",  JSON.stringify(incomes));
+}
+
 // ═══════════════════════════════════════════════════════════
 //  CRUD — EXPENSES
 // ═══════════════════════════════════════════════════════════
@@ -257,27 +288,58 @@ function addExpense() {
   if (!amount || amount <= 0) { showToast("Nhập số tiền hợp lệ", "error"); return; }
   if (!date)                  { showToast("Chọn ngày", "error"); return; }
 
-  expenses.unshift({ id: Date.now(), amount, note, date, category });
-  localStorage.setItem("expenses", JSON.stringify(expenses));
+  if (_editingId !== null) {
+    const idx = expenses.findIndex(e => e.id === _editingId);
+    if (idx !== -1) {
+      expenses[idx] = { ...expenses[idx], amount, note, date, category, updatedAt: Date.now() };
+    }
+    _editingId = null;
+    document.getElementById("addSheetTitle").textContent = "💸 Thêm chi tiêu";
+    document.getElementById("addSubmitBtn").textContent  = "Thêm chi tiêu";
+  } else {
+    expenses.unshift({ id: Date.now(), amount, note, date, category, updatedAt: Date.now() });
+  }
+
+  saveLocal();
   closeSheets();
   renderAll();
-  showToast("✅ Đã thêm chi tiêu", "success");
+  showToast(_editingId !== null ? "✅ Đã cập nhật" : "✅ Đã thêm chi tiêu", "success");
   if (accessToken) syncToDrive();
 
   document.getElementById("inputAmount").value = "";
   document.getElementById("suggestions").innerHTML = "";
   document.getElementById("inputNote").value = "";
   setTodayDate("inputDate");
+  buildCatGrid("catGrid", CATEGORIES, "selectExpCat");
 }
 
 function deleteExpense(id) {
   showConfirm("Xóa khoản chi tiêu này?", () => {
-    expenses = expenses.filter(e => e.id !== id);
-    localStorage.setItem("expenses", JSON.stringify(expenses));
+    const idx = expenses.findIndex(e => e.id === id);
+    if (idx !== -1) {
+      expenses[idx] = { ...expenses[idx], deletedAt: Date.now(), updatedAt: Date.now() };
+    }
+    saveLocal();
     renderAll();
     if (accessToken) syncToDrive();
     showToast("🗑️ Đã xóa", "success");
   });
+}
+
+function editExpense(id) {
+  const item = expenses.find(e => e.id === id);
+  if (!item) return;
+  _editingId = id;
+  document.getElementById("inputAmount").value = String(item.amount);
+  document.getElementById("inputNote").value   = item.note;
+  document.getElementById("inputDate").value   = item.date;
+  document.getElementById("addSheetTitle").textContent = "✏️ Sửa chi tiêu";
+  document.getElementById("addSubmitBtn").textContent  = "Lưu thay đổi";
+  // Chọn đúng category
+  document.querySelectorAll("#catGrid .cat-btn").forEach(b => {
+    b.classList.toggle("selected", b.dataset.cat === item.category);
+  });
+  openAddSheet();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -294,40 +356,86 @@ function addIncome() {
   if (!amount || amount <= 0) { showToast("Nhập số tiền hợp lệ", "error"); return; }
   if (!date)                  { showToast("Chọn ngày", "error"); return; }
 
-  incomes.unshift({ id: Date.now(), amount, note, date, category });
-  localStorage.setItem("incomes", JSON.stringify(incomes));
+  if (_editingId !== null) {
+    const idx = incomes.findIndex(e => e.id === _editingId);
+    if (idx !== -1) {
+      incomes[idx] = { ...incomes[idx], amount, note, date, category, updatedAt: Date.now() };
+    }
+    _editingId = null;
+    document.getElementById("incomeSheetTitle").textContent = "💚 Thêm thu nhập";
+    document.getElementById("incomeSubmitBtn").textContent  = "Thêm thu nhập";
+  } else {
+    incomes.unshift({ id: Date.now(), amount, note, date, category, updatedAt: Date.now() });
+  }
+
+  saveLocal();
   closeSheets();
   renderAll();
-  showToast("✅ Đã thêm thu nhập", "success");
+  showToast("✅ Đã lưu thu nhập", "success");
   if (accessToken) syncToDrive();
 
   document.getElementById("inputIncomeAmount").value = "";
   document.getElementById("incomeSuggestions").innerHTML = "";
   document.getElementById("inputIncomeNote").value = "";
   setTodayDate("inputIncomeDate");
+  buildCatGrid("incomeCatGrid", INCOME_CATEGORIES, "selectIncCat");
 }
 
 function deleteIncome(id) {
   showConfirm("Xóa khoản thu nhập này?", () => {
-    incomes = incomes.filter(e => e.id !== id);
-    localStorage.setItem("incomes", JSON.stringify(incomes));
+    const idx = incomes.findIndex(e => e.id === id);
+    if (idx !== -1) {
+      incomes[idx] = { ...incomes[idx], deletedAt: Date.now(), updatedAt: Date.now() };
+    }
+    saveLocal();
     renderAll();
     if (accessToken) syncToDrive();
     showToast("🗑️ Đã xóa", "success");
   });
 }
 
+function editIncome(id) {
+  const item = incomes.find(e => e.id === id);
+  if (!item) return;
+  _editingId = id;
+  document.getElementById("inputIncomeAmount").value = String(item.amount);
+  document.getElementById("inputIncomeNote").value   = item.note;
+  document.getElementById("inputIncomeDate").value   = item.date;
+  document.getElementById("incomeSheetTitle").textContent = "✏️ Sửa thu nhập";
+  document.getElementById("incomeSubmitBtn").textContent  = "Lưu thay đổi";
+  document.querySelectorAll("#incomeCatGrid .cat-btn").forEach(b => {
+    b.classList.toggle("selected", b.dataset.cat === item.category);
+  });
+  openIncomeSheet();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  EXPORT CSV
+// ═══════════════════════════════════════════════════════════
+function exportCSV() {
+  const rows = [["Ngày", "Loại", "Danh mục", "Ghi chú", "Số tiền"]];
+  const activeExp = expenses.filter(e => !e.deletedAt);
+  const activeInc = incomes.filter(e => !e.deletedAt);
+  const all = [
+    ...activeExp.map(e => [e.date, "Chi tiêu", e.category, e.note, e.amount]),
+    ...activeInc.map(e => [e.date, "Thu nhập", e.category, e.note, e.amount]),
+  ].sort((a, b) => b[0].localeCompare(a[0]));
+
+  rows.push(...all);
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `chi-tieu-${todayStr()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast("📥 Đã xuất CSV", "success");
+}
+
 // ═══════════════════════════════════════════════════════════
 //  RENDER
 // ═══════════════════════════════════════════════════════════
-function fmt(n) {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M₫";
-  if (n >= 1_000)     return Math.round(n / 1_000) + "K₫";
-  return n.toLocaleString("vi-VN") + "₫";
-}
-const todayStr     = () => new Date().toISOString().split("T")[0];
-const thisMonthStr = () => todayStr().slice(0, 7);
-
 function renderAll() {
   renderSummary();
   renderCatBars();
@@ -336,37 +444,41 @@ function renderAll() {
 
 function renderSummary() {
   const t = todayStr(), m = thisMonthStr();
-  const td = expenses.filter(e => e.date === t);
-  const mo = expenses.filter(e => e.date.startsWith(m));
-  const moIncome = incomes.filter(e => e.date.startsWith(m));
+  const activeExp = expenses.filter(e => !e.deletedAt);
+  const activeInc = incomes.filter(e => !e.deletedAt);
+  const td = activeExp.filter(e => e.date === t);
+  const mo = activeExp.filter(e => e.date.startsWith(m));
+  const moIncome = activeInc.filter(e => e.date.startsWith(m));
 
-  const monthExpTotal  = mo.reduce((s, e) => s + e.amount, 0);
-  const monthIncTotal  = moIncome.reduce((s, e) => s + e.amount, 0);
-  const balance        = monthIncTotal - monthExpTotal;
+  const monthExpTotal = mo.reduce((s, e) => s + e.amount, 0);
+  const monthIncTotal = moIncome.reduce((s, e) => s + e.amount, 0);
+  const balance       = monthIncTotal - monthExpTotal;
 
-  document.getElementById("todayTotal").textContent  = fmt(td.reduce((s, e) => s + e.amount, 0));
-  document.getElementById("todayCount").textContent  = `${td.length} khoản`;
-  document.getElementById("monthTotal").textContent  = fmt(monthExpTotal);
-  document.getElementById("monthCount").textContent  = `${mo.length} khoản`;
-  document.getElementById("monthIncome").textContent = fmt(monthIncTotal);
-  document.getElementById("incomeCount").textContent = `${moIncome.length} khoản`;
+  setText("todayTotal",  fmt(td.reduce((s, e) => s + e.amount, 0)));
+  setText("todayCount",  `${td.length} khoản`);
+  setText("monthTotal",  fmt(monthExpTotal));
+  setText("monthCount",  `${mo.length} khoản`);
+  setText("monthIncome", fmt(monthIncTotal));
+  setText("incomeCount", `${moIncome.length} khoản`);
 
   const balEl = document.getElementById("balanceAmount");
-  balEl.textContent = (balance >= 0 ? "+" : "") + fmt(Math.abs(balance));
-  balEl.className   = "amount " + (balance >= 0 ? "balance-pos" : "balance-neg");
+  if (balEl) {
+    balEl.textContent = (balance >= 0 ? "+" : "") + fmt(Math.abs(balance));
+    balEl.className   = "amount " + (balance >= 0 ? "balance-pos" : "balance-neg");
+  }
 
   const rate = monthIncTotal > 0 ? Math.round((balance / monthIncTotal) * 100) : null;
-  document.getElementById("savingsRate").textContent =
-    rate !== null ? `Tiết kiệm ${rate}% thu nhập` : "Chưa có thu nhập tháng này";
-  document.getElementById("savingsBadge").textContent =
-    rate === null ? "💡" : rate >= 30 ? "🌟" : rate >= 10 ? "👍" : "⚠️";
+  setText("savingsRate",  rate !== null ? `Tiết kiệm ${rate}% thu nhập` : "Chưa có thu nhập tháng này");
+  setText("savingsBadge", rate === null ? "💡" : rate >= 30 ? "🌟" : rate >= 10 ? "👍" : "⚠️");
 }
 
 function renderCatBars() {
   const m     = thisMonthStr();
-  const items = expenses.filter(e => e.date.startsWith(m));
-  if (!items.length) { document.getElementById("catSection").style.display = "none"; return; }
-  document.getElementById("catSection").style.display = "";
+  const items = expenses.filter(e => !e.deletedAt && e.date.startsWith(m));
+  const el    = document.getElementById("catSection");
+  if (!el) return;
+  if (!items.length) { el.style.display = "none"; return; }
+  el.style.display = "";
   const totals = {};
   items.forEach(e => { totals[e.category] = (totals[e.category] || 0) + e.amount; });
   const grand = items.reduce((s, e) => s + e.amount, 0);
@@ -384,13 +496,14 @@ function renderCatBars() {
 }
 
 function renderList() {
-  // Merge expenses + incomes into a unified list
+  const activeExp = expenses.filter(e => !e.deletedAt);
+  const activeInc = incomes.filter(e => !e.deletedAt);
   const all = [
-    ...expenses.map(e => ({ ...e, kind: "expense" })),
-    ...incomes.map(e  => ({ ...e, kind: "income"  })),
+    ...activeExp.map(e => ({ ...e, kind: "expense" })),
+    ...activeInc.map(e  => ({ ...e, kind: "income"  })),
   ];
-  const filtered = activeFilter === "All"      ? all
-    : activeFilter === "__income__"            ? all.filter(e => e.kind === "income")
+  const filtered = activeFilter === "All"        ? all
+    : activeFilter === "__income__"              ? all.filter(e => e.kind === "income")
     : all.filter(e => e.kind === "expense" && e.category === activeFilter);
 
   const el = document.getElementById("expenseList");
@@ -418,7 +531,8 @@ function renderList() {
               <div class="exp-note">${escHtml(e.note)}</div>
               <div class="exp-meta">${e.category}</div>
             </div>
-            <span class="exp-amount income-amt">+${fmt(e.amount)}</span>
+            <span class="exp-amount income-amt">+${fmtExact(e.amount)}</span>
+            <button class="edit-btn" onclick="editIncome(${e.id})" aria-label="Sửa">✏️</button>
             <button class="del-btn" onclick="deleteIncome(${e.id})" aria-label="Xóa">✕</button>
           </div>` : `
           <div class="expense-item">
@@ -427,7 +541,8 @@ function renderList() {
               <div class="exp-note">${escHtml(e.note)}</div>
               <div class="exp-meta">${e.category}</div>
             </div>
-            <span class="exp-amount">-${fmt(e.amount)}</span>
+            <span class="exp-amount">-${fmtExact(e.amount)}</span>
+            <button class="edit-btn" onclick="editExpense(${e.id})" aria-label="Sửa">✏️</button>
             <button class="del-btn" onclick="deleteExpense(${e.id})" aria-label="Xóa">✕</button>
           </div>`).join("")}
       </div>`;
@@ -448,12 +563,14 @@ function fmtDate(d) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  STATS + BEHAVIOR ANALYSIS
+//  STATS
 // ═══════════════════════════════════════════════════════════
 function renderStats() {
   const m         = thisMonthStr();
-  const moExp     = expenses.filter(e => e.date.startsWith(m));
-  const moInc     = incomes.filter(e => e.date.startsWith(m));
+  const activeExp = expenses.filter(e => !e.deletedAt);
+  const activeInc = incomes.filter(e => !e.deletedAt);
+  const moExp     = activeExp.filter(e => e.date.startsWith(m));
+  const moInc     = activeInc.filter(e => e.date.startsWith(m));
   const grand     = moExp.reduce((s, e) => s + e.amount, 0);
   const totalInc  = moInc.reduce((s, e) => s + e.amount, 0);
   const balance   = totalInc - grand;
@@ -465,29 +582,26 @@ function renderStats() {
   const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
   const topCat = sorted[0];
 
-  // 7-day bar chart data
   const last7 = [];
   for (let i = 6; i >= 0; i--) {
     const d = new Date(Date.now() - i * 86400000).toISOString().split("T")[0];
     last7.push({
       d,
-      exp: expenses.filter(e => e.date === d).reduce((s, e) => s + e.amount, 0),
-      inc: incomes.filter(e => e.date === d).reduce((s, e) => s + e.amount, 0),
+      exp: activeExp.filter(e => e.date === d).reduce((s, e) => s + e.amount, 0),
+      inc: activeInc.filter(e => e.date === d).reduce((s, e) => s + e.amount, 0),
     });
   }
   const maxDay = Math.max(...last7.map(x => Math.max(x.exp, x.inc)), 1);
 
-  // Behavior insights
   const daysWithData = new Set(moExp.map(e => e.date)).size;
   const savingsRate  = totalInc > 0 ? Math.round((balance / totalInc) * 100) : null;
   const spendPct     = totalInc > 0 ? Math.min(100, Math.round((grand / totalInc) * 100)) : null;
 
-  // Spending velocity: compare last 7d avg vs prior 7d avg
-  const last7sum  = last7.reduce((s, x) => s + x.exp, 0);
+  const last7sum = last7.reduce((s, x) => s + x.exp, 0);
   const prev7 = [];
   for (let i = 13; i >= 7; i--) {
     const d = new Date(Date.now() - i * 86400000).toISOString().split("T")[0];
-    prev7.push(expenses.filter(e => e.date === d).reduce((s, e) => s + e.amount, 0));
+    prev7.push(activeExp.filter(e => e.date === d).reduce((s, e) => s + e.amount, 0));
   }
   const prev7sum = prev7.reduce((a, b) => a + b, 0);
   const trend = prev7sum > 0
@@ -501,9 +615,11 @@ function renderStats() {
     : trend > 0 ? "var(--red)" : trend < 0 ? "var(--green)" : "var(--blue)";
 
   document.getElementById("statsContent").innerHTML = `
-    <div class="stats-title">📊 Phân tích chi tiêu</div>
+    <div class="stats-header">
+      <div class="stats-title">📊 Phân tích chi tiêu</div>
+      <button class="export-btn" onclick="exportCSV()">📥 Xuất CSV</button>
+    </div>
 
-    <!-- Insight grid -->
     <div class="insight-grid">
       <div class="insight-card">
         <div class="i-label">Thu nhập T.này</div>
@@ -529,7 +645,6 @@ function renderStats() {
       </div>
     </div>
 
-    <!-- Spending vs Income bar -->
     ${totalInc > 0 ? `
     <div class="stat-block">
       <div class="block-label">Tỉ lệ chi tiêu / thu nhập</div>
@@ -542,7 +657,6 @@ function renderStats() {
       <div style="font-size:12px;color:var(--muted);text-align:right">${spendPct}% đã chi</div>
     </div>` : ""}
 
-    <!-- 7-day chart -->
     <div class="stat-block">
       <div class="block-label">7 ngày gần nhất</div>
       <div style="display:flex;align-items:flex-end;gap:5px;height:80px;margin-bottom:8px">
@@ -561,7 +675,6 @@ function renderStats() {
       </div>
     </div>
 
-    <!-- Trend -->
     <div class="stat-block">
       <div class="block-label">Xu hướng chi tiêu</div>
       <div class="stat-row">
@@ -574,7 +687,6 @@ function renderStats() {
       </div>
     </div>
 
-    <!-- Category breakdown -->
     <div class="stat-block">
       <div class="block-label">Danh mục tháng này</div>
       ${sorted.length === 0
@@ -593,7 +705,6 @@ function renderStats() {
           </div>`}
     </div>
 
-    <!-- Overview -->
     <div class="stat-block">
       <div class="block-label">Tổng quan tháng này</div>
       <div class="stat-row">
@@ -671,6 +782,14 @@ function handleOverlayClick(e) {
 }
 
 function closeSheets() {
+  // Reset trạng thái edit khi đóng sheet
+  if (_editingId !== null) {
+    _editingId = null;
+    document.getElementById("addSheetTitle").textContent    = "💸 Thêm chi tiêu";
+    document.getElementById("addSubmitBtn").textContent     = "Thêm chi tiêu";
+    document.getElementById("incomeSheetTitle").textContent = "💚 Thêm thu nhập";
+    document.getElementById("incomeSubmitBtn").textContent  = "Thêm thu nhập";
+  }
   closeFab();
   document.getElementById("overlay").classList.remove("open");
   document.querySelectorAll(".sheet").forEach(s => s.classList.remove("open"));
@@ -726,8 +845,7 @@ function showToast(msg, type) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  CUSTOM CONFIRM DIALOG (replaces native confirm() which
-//  can be blocked or visually covered on mobile browsers)
+//  CUSTOM CONFIRM DIALOG
 // ═══════════════════════════════════════════════════════════
 let _confirmCallback = null;
 
