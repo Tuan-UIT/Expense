@@ -15,19 +15,12 @@
     <meta name="theme-color" content="#0D1117" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' https://accounts.google.com; connect-src https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src https://accounts.google.com;"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com; connect-src https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src https://accounts.google.com;"
     />
     <title>💸 Chi Tiêu</title>
     <link rel="manifest" href="manifest.json" />
     <link rel="stylesheet" href="style.css" />
-    <script
-      src="https://accounts.google.com/gsi/client"
-      async
-      defer
-      onload="
-        if (typeof onGoogleLibraryLoad === 'function') onGoogleLibraryLoad();
-      "
-    ></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
     <!-- HEADER -->
