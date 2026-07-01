@@ -38,11 +38,15 @@ let accessToken  = null;
 let driveFileId  = null;
 let fabOpen      = false;
 let _editingId   = null;  // id đang sửa, null = đang thêm mới
+let selectedMonth = null; // tháng đang xem trong trang Thống kê ("YYYY-MM"), gán ở INIT
+let selectedYear  = null; // năm đang xem trong khối tổng hợp theo năm, gán ở INIT
 
 // ═══════════════════════════════════════════════════════════
 //  INIT
 // ═══════════════════════════════════════════════════════════
 window.addEventListener("load", () => {
+  selectedMonth = thisMonthStr();
+  selectedYear  = new Date().getFullYear();
   buildCatGrid("catGrid", CATEGORIES, "selectExpCat");
   buildCatGrid("incomeCatGrid", INCOME_CATEGORIES, "selectIncCat");
   setTodayDate("inputDate");
@@ -585,8 +589,26 @@ function fmtDate(d) {
 // ═══════════════════════════════════════════════════════════
 //  STATS
 // ═══════════════════════════════════════════════════════════
+function changeStatsMonth(delta) {
+  const [y, mo] = selectedMonth.split("-").map(Number);
+  const d = new Date(y, mo - 1 + delta, 1);
+  selectedMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  renderStats();
+}
+
+function fmtMonthLabel(m) {
+  const [y, mo] = m.split("-").map(Number);
+  return `Tháng ${mo}/${y}`;
+}
+
+function changeStatsYear(delta) {
+  selectedYear += delta;
+  renderStats();
+}
+
 function renderStats() {
-  const m         = thisMonthStr();
+  const m         = selectedMonth;
+  const isCurrentMonth = m === thisMonthStr();
   const activeExp = expenses.filter(e => !e.deletedAt);
   const activeInc = incomes.filter(e => !e.deletedAt);
   const moExp     = activeExp.filter(e => e.date.startsWith(m));
@@ -594,7 +616,9 @@ function renderStats() {
   const grand     = moExp.reduce((s, e) => s + e.amount, 0);
   const totalInc  = moInc.reduce((s, e) => s + e.amount, 0);
   const balance   = totalInc - grand;
-  const today     = new Date().getDate();
+  const [selY, selMo] = m.split("-").map(Number);
+  const daysInMonth = new Date(selY, selMo, 0).getDate();
+  const today     = isCurrentMonth ? new Date().getDate() : daysInMonth;
   const avgPerDay = today > 0 ? Math.round(grand / today) : 0;
 
   const totals = {};
@@ -611,8 +635,6 @@ function renderStats() {
       inc: activeInc.filter(e => e.date === d).reduce((s, e) => s + e.amount, 0),
     });
   }
-  const maxDay = Math.max(...last7.map(x => Math.max(x.exp, x.inc)), 1);
-
   const daysWithData = new Set(moExp.map(e => e.date)).size;
   const savingsRate  = totalInc > 0 ? Math.round((balance / totalInc) * 100) : null;
   const spendPct     = totalInc > 0 ? Math.min(100, Math.round((grand / totalInc) * 100)) : null;
@@ -634,20 +656,44 @@ function renderStats() {
   const trendColor = trend === null ? "var(--muted)"
     : trend > 0 ? "var(--red)" : trend < 0 ? "var(--green)" : "var(--blue)";
 
+  const yr = selectedYear;
+  const yPrefix = String(yr);
+  const yExp = activeExp.filter(e => e.date.startsWith(yPrefix));
+  const yInc = activeInc.filter(e => e.date.startsWith(yPrefix));
+  const monthRows = [];
+  for (let i = 0; i < 12; i++) {
+    const mm = String(i + 1).padStart(2, "0");
+    const prefix = `${yPrefix}-${mm}`;
+    const mExp = yExp.filter(e => e.date.startsWith(prefix)).reduce((s, e) => s + e.amount, 0);
+    const mInc = yInc.filter(e => e.date.startsWith(prefix)).reduce((s, e) => s + e.amount, 0);
+    monthRows.push({ month: i + 1, exp: mExp, inc: mInc, balance: mInc - mExp });
+  }
+  const yearExpTotal = monthRows.reduce((s, r) => s + r.exp, 0);
+  const yearIncTotal = monthRows.reduce((s, r) => s + r.inc, 0);
+  const yearBalance  = yearIncTotal - yearExpTotal;
+  const hasYearData  = yearExpTotal > 0 || yearIncTotal > 0;
+  const isCurrentYear = yr === new Date().getFullYear();
+
   document.getElementById("statsContent").innerHTML = `
     <div class="stats-header">
       <div class="stats-title">📊 Phân tích chi tiêu</div>
       <button class="export-btn" onclick="exportCSV()">📥 Xuất CSV</button>
     </div>
 
+    <div class="month-switcher">
+      <button class="month-nav-btn" onclick="changeStatsMonth(-1)" aria-label="Tháng trước">◀</button>
+      <span class="month-label">${fmtMonthLabel(m)}${isCurrentMonth ? " (hiện tại)" : ""}</span>
+      <button class="month-nav-btn" onclick="changeStatsMonth(1)" aria-label="Tháng sau" ${isCurrentMonth ? "disabled" : ""}>▶</button>
+    </div>
+
     <div class="insight-grid">
       <div class="insight-card">
-        <div class="i-label">Thu nhập T.này</div>
+        <div class="i-label">Thu nhập T.${selMo}</div>
         <div class="i-value" style="color:var(--green)">${fmt(totalInc)}</div>
         <div class="i-sub">${moInc.length} khoản</div>
       </div>
       <div class="insight-card">
-        <div class="i-label">Chi tiêu T.này</div>
+        <div class="i-label">Chi tiêu T.${selMo}</div>
         <div class="i-value" style="color:var(--red)">${fmt(grand)}</div>
         <div class="i-sub">${moExp.length} giao dịch</div>
       </div>
@@ -677,21 +723,11 @@ function renderStats() {
       <div style="font-size:12px;color:var(--muted);text-align:right">${spendPct}% đã chi</div>
     </div>` : ""}
 
+    ${isCurrentMonth ? `
     <div class="stat-block">
       <div class="block-label">7 ngày gần nhất</div>
-      <div style="display:flex;align-items:flex-end;gap:5px;height:80px;margin-bottom:8px">
-        ${last7.map(({ d, exp, inc }) => `
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
-            <div style="flex:1;width:100%;position:relative;display:flex;align-items:flex-end;gap:2px">
-              ${inc > 0 ? `<div style="flex:1;background:var(--green);opacity:0.7;border-radius:3px 3px 0 0;height:${((inc/maxDay)*100).toFixed(0)}%"></div>` : `<div style="flex:1"></div>`}
-              ${exp > 0 ? `<div style="flex:1;background:var(--red);opacity:0.85;border-radius:3px 3px 0 0;height:${((exp/maxDay)*100).toFixed(0)}%"></div>` : `<div style="flex:1"></div>`}
-            </div>
-            <span style="font-size:10px;color:var(--muted)">${new Date(d+"T00:00:00").getDate()}</span>
-          </div>`).join("")}
-      </div>
-      <div style="display:flex;gap:12px;font-size:11px;color:var(--muted)">
-        <span><span style="display:inline-block;width:8px;height:8px;background:var(--green);border-radius:2px;margin-right:3px"></span>Thu</span>
-        <span><span style="display:inline-block;width:8px;height:8px;background:var(--red);border-radius:2px;margin-right:3px"></span>Chi</span>
+      <div class="chart-box" style="height:160px">
+        <canvas id="chartLast7"></canvas>
       </div>
     </div>
 
@@ -705,13 +741,16 @@ function renderStats() {
         <div class="sr-left">📈 So sánh</div>
         <div class="sr-right" style="color:${trendColor};font-size:13px">${trendText}</div>
       </div>
-    </div>
+    </div>` : ""}
 
     <div class="stat-block">
-      <div class="block-label">Danh mục tháng này</div>
+      <div class="block-label">Danh mục ${fmtMonthLabel(m).toLowerCase()}</div>
       ${sorted.length === 0
         ? '<p style="color:var(--muted);font-size:13px">Chưa có dữ liệu</p>'
-        : sorted.map(([cat, amt]) => `
+        : `<div class="chart-box" style="height:200px">
+        <canvas id="chartCategory"></canvas>
+      </div>` +
+        sorted.map(([cat, amt]) => `
           <div class="stat-row">
             <div class="sr-left">${catEmoji(cat)} ${escHtml(cat)}</div>
             <div class="sr-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
@@ -726,7 +765,7 @@ function renderStats() {
     </div>
 
     <div class="stat-block">
-      <div class="block-label">Tổng quan tháng này</div>
+      <div class="block-label">Tổng quan ${fmtMonthLabel(m).toLowerCase()}</div>
       <div class="stat-row">
         <div class="sr-left">📅 Ngày có chi tiêu</div>
         <div class="sr-right" style="color:var(--blue)">${daysWithData} ngày</div>
@@ -745,7 +784,150 @@ function renderStats() {
         <div class="sr-right" style="color:var(--yellow)">${fmt(avgPerDay)}</div>
       </div>
     </div>
+
+    <div class="stat-block">
+      <div class="block-label">Tổng hợp theo năm</div>
+      <div class="year-switcher">
+        <button class="month-nav-btn" onclick="changeStatsYear(-1)" aria-label="Năm trước">◀</button>
+        <span class="month-label">Năm ${yr}${isCurrentYear ? " (hiện tại)" : ""}</span>
+        <button class="month-nav-btn" onclick="changeStatsYear(1)" aria-label="Năm sau" ${isCurrentYear ? "disabled" : ""}>▶</button>
+      </div>
+      ${!hasYearData ? '<p style="color:var(--muted);font-size:13px">Chưa có dữ liệu năm này</p>' : `
+      <div class="chart-box" style="height:180px;margin-bottom:12px">
+        <canvas id="chartYear"></canvas>
+      </div>
+      <div class="year-table">
+        <div class="year-row year-head">
+          <span>Tháng</span><span>Thu</span><span>Chi</span><span>Còn lại</span>
+        </div>
+        ${monthRows.filter(r => r.inc > 0 || r.exp > 0).map(r => `
+        <div class="year-row">
+          <span>Th${r.month}</span>
+          <span style="color:var(--green)">${r.inc > 0 ? "+" + fmt(r.inc) : "—"}</span>
+          <span style="color:var(--red)">${r.exp > 0 ? "-" + fmt(r.exp) : "—"}</span>
+          <span style="color:${r.balance >= 0 ? "var(--green)" : "var(--red)"}">${r.balance >= 0 ? "+" : ""}${fmt(Math.abs(r.balance))}</span>
+        </div>`).join("")}
+        <div class="year-row year-total">
+          <span>Tổng</span>
+          <span style="color:var(--green)">+${fmt(yearIncTotal)}</span>
+          <span style="color:var(--red)">-${fmt(yearExpTotal)}</span>
+          <span style="color:${yearBalance >= 0 ? "var(--green)" : "var(--red)"}">${yearBalance >= 0 ? "+" : ""}${fmt(Math.abs(yearBalance))}</span>
+        </div>
+      </div>`}
+    </div>
   `;
+
+  renderStatsCharts({ sorted, grand, last7, monthRows, isCurrentMonth, hasYearData });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  STATS CHARTS (Chart.js)
+// ═══════════════════════════════════════════════════════════
+let _charts = {};
+
+function destroyChart(key) {
+  if (_charts[key]) {
+    _charts[key].destroy();
+    delete _charts[key];
+  }
+}
+
+function renderStatsCharts({ sorted, grand, last7, monthRows, isCurrentMonth, hasYearData }) {
+  ["chartCategory", "chartLast7", "chartYear"].forEach(destroyChart);
+  if (typeof Chart === "undefined") return;
+
+  const mutedColor = "#8b949e";
+  const gridColor  = "rgba(139,148,158,0.15)";
+  Chart.defaults.color = mutedColor;
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+
+  if (sorted.length > 0) {
+    const ctx = document.getElementById("chartCategory");
+    if (ctx) {
+      _charts.chartCategory = new Chart(ctx, {
+        type: "doughnut",
+        data: {
+          labels: sorted.map(([cat]) => cat),
+          datasets: [{
+            data: sorted.map(([, amt]) => amt),
+            backgroundColor: sorted.map(([cat]) => catColor(cat)),
+            borderColor: "#1c2230",
+            borderWidth: 2,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: "62%",
+          plugins: {
+            legend: { position: "bottom", labels: { boxWidth: 10, padding: 10, font: { size: 11 } } },
+            tooltip: {
+              callbacks: {
+                label: (item) => ` ${item.label}: ${fmtExact(item.raw)} (${grand > 0 ? ((item.raw / grand) * 100).toFixed(0) : 0}%)`,
+              },
+            },
+          },
+        },
+      });
+    }
+  }
+
+  if (isCurrentMonth) {
+    const ctx = document.getElementById("chartLast7");
+    if (ctx) {
+      _charts.chartLast7 = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: last7.map(({ d }) => new Date(d + "T00:00:00").getDate()),
+          datasets: [
+            { label: "Thu", data: last7.map(x => x.inc), backgroundColor: "#3fb950", borderRadius: 4 },
+            { label: "Chi", data: last7.map(x => x.exp), backgroundColor: "#f85149", borderRadius: 4 },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: "bottom", labels: { boxWidth: 10, padding: 10, font: { size: 11 } } },
+            tooltip: { callbacks: { label: (item) => ` ${item.dataset.label}: ${fmtExact(item.raw)}` } },
+          },
+          scales: {
+            x: { grid: { display: false } },
+            y: { grid: { color: gridColor }, ticks: { callback: (v) => fmt(v) } },
+          },
+        },
+      });
+    }
+  }
+
+  if (hasYearData) {
+    const ctx = document.getElementById("chartYear");
+    if (ctx) {
+      const withData = monthRows.filter((r, i) => i <= monthRows.findLastIndex(x => x.inc > 0 || x.exp > 0));
+      _charts.chartYear = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: withData.map(r => `Th${r.month}`),
+          datasets: [
+            { label: "Thu", data: withData.map(r => r.inc), borderColor: "#3fb950", backgroundColor: "rgba(63,185,80,0.15)", tension: 0.3, fill: true },
+            { label: "Chi", data: withData.map(r => r.exp), borderColor: "#f85149", backgroundColor: "rgba(248,81,73,0.15)", tension: 0.3, fill: true },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: "bottom", labels: { boxWidth: 10, padding: 10, font: { size: 11 } } },
+            tooltip: { callbacks: { label: (item) => ` ${item.dataset.label}: ${fmtExact(item.raw)}` } },
+          },
+          scales: {
+            x: { grid: { display: false } },
+            y: { grid: { color: gridColor }, ticks: { callback: (v) => fmt(v) } },
+          },
+        },
+      });
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
