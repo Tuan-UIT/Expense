@@ -139,8 +139,10 @@ function setupAmountSuggestions(inputId, suggestionsId) {
 // ═══════════════════════════════════════════════════════════
 //  GOOGLE OAUTH
 // ═══════════════════════════════════════════════════════════
+const LOGGED_IN_FLAG = "wasLoggedIn";
 let _tokenClient = null;
 let _sdkReady = false;
+let _tokenExpiryTimer = null;
 
 // Gọi sớm từ onload để khởi tạo client trước khi user nhấn nút
 function initTokenClient() {
@@ -154,25 +156,61 @@ function initTokenClient() {
       "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata",
     callback: (res) => {
       if (res.error) {
-        setSyncState("error", "Lỗi");
-        showToast("Đăng nhập thất bại: " + res.error, "error");
+        // Silent refresh (prompt:"none") thất bại là bình thường khi phiên Google
+        // hết hạn hoặc quyền bị thu hồi — chỉ báo lỗi khi đây là lượt đăng nhập chủ động.
+        if (!_silentAttempt) {
+          setSyncState("error", "Lỗi");
+          showToast("Đăng nhập thất bại: " + res.error, "error");
+        } else {
+          localStorage.removeItem(LOGGED_IN_FLAG);
+          setSyncState("idle", "Đồng bộ");
+        }
+        _silentAttempt = false;
         return;
       }
+      _silentAttempt = false;
       accessToken = res.access_token;
-      setTimeout(() => {
-        accessToken = null;
-      }, 3500 * 1000);
+      localStorage.setItem(LOGGED_IN_FLAG, "1");
+      scheduleTokenRefresh(res.expires_in);
       setSyncState("syncing", "Đang tải…");
       syncFromDrive();
     },
   });
   _sdkReady = true;
+
+  // Nếu trước đó đã đăng nhập, tự khôi phục phiên ngầm — không cần bấm nút.
+  if (localStorage.getItem(LOGGED_IN_FLAG) === "1") {
+    silentLogin();
+  }
 }
 
 // SDK có thể load sau window.load, dùng callback này để khởi tạo
 window.onGoogleLibraryLoad = function () {
   initTokenClient();
 };
+
+let _silentAttempt = false;
+
+// Yêu cầu access token mới mà không hiện popup (yêu cầu vẫn còn phiên Google trên trình duyệt)
+function silentLogin() {
+  if (!_tokenClient || accessToken) return;
+  _silentAttempt = true;
+  try {
+    _tokenClient.requestAccessToken({ prompt: "none" });
+  } catch (e) {
+    _silentAttempt = false;
+  }
+}
+
+// Tự làm mới token ngầm trước khi hết hạn, để app luôn có thể tự đồng bộ
+function scheduleTokenRefresh(expiresInSec) {
+  if (_tokenExpiryTimer) clearTimeout(_tokenExpiryTimer);
+  const ms = Math.max((Number(expiresInSec) || 3500) - 120, 60) * 1000;
+  _tokenExpiryTimer = setTimeout(() => {
+    accessToken = null;
+    silentLogin();
+  }, ms);
+}
 
 function initOAuthFlow() {
   // Thử khởi tạo lại nếu chưa có (phòng trường hợp SDK load trễ)
