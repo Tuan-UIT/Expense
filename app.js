@@ -623,13 +623,96 @@ function renderCatBars() {
     .slice(0, 4)
     .map(
       ([cat, amt]) => `
-      <div class="cat-row">
-        <span class="cat-label">${cat}</span>
+      <div class="cat-row" onclick="openCatDetail(${JSON.stringify(cat)}, selectedMonthForHome())" role="button" tabindex="0">
+        <span class="cat-label">${escHtml(cat)}</span>
         <div class="bar-track"><div class="bar-fill" style="width:${((amt / max) * 100).toFixed(0)}%;background:${catColor(cat)}"></div></div>
         <span class="cat-pct">${((amt / grand) * 100).toFixed(0)}%</span>
       </div>`,
     )
     .join("");
+}
+
+function selectedMonthForHome() {
+  return thisMonthStr();
+}
+
+// ═══════════════════════════════════════════════════════════
+//  CATEGORY DETAIL SHEET
+// ═══════════════════════════════════════════════════════════
+function openCatDetail(category, month) {
+  const items = expenses
+    .filter(
+      (e) =>
+        !e.deletedAt && e.category === category && e.date.startsWith(month),
+    )
+    .sort((a, b) => b.amount - a.amount);
+
+  const total = items.reduce((s, e) => s + e.amount, 0);
+  const top = items[0];
+
+  document.getElementById("catDetailTitle").innerHTML =
+    `${catEmoji(category)} ${escHtml(category.split(" ").slice(1).join(" "))}`;
+
+  const content = document.getElementById("catDetailContent");
+
+  if (!items.length) {
+    content.innerHTML = `<div class="empty-state"><div class="icon">🪙</div><p>Không có giao dịch nào trong ${fmtMonthLabel(month).toLowerCase()}.</p></div>`;
+    openSheetById("catDetailSheet");
+    return;
+  }
+
+  content.innerHTML = `
+    <div class="cat-detail-summary">
+      <div class="cd-total">
+        <span class="cd-label">Tổng chi ${fmtMonthLabel(month).toLowerCase()}</span>
+        <span class="cd-value">${fmtExact(total)}</span>
+      </div>
+      <span class="cd-count">${items.length} giao dịch</span>
+    </div>
+
+    ${
+      top
+        ? `
+    <div class="cd-top-card">
+      <div class="cd-top-badge">🏆 Chi nhiều nhất</div>
+      <div class="cd-top-row">
+        <div class="cd-top-info">
+          <div class="cd-top-note">${escHtml(top.note)}</div>
+          <div class="cd-top-date">${fmtDate(top.date)}</div>
+        </div>
+        <div class="cd-top-amount">${fmtExact(top.amount)}</div>
+      </div>
+      <div class="cd-top-pct">Chiếm ${total > 0 ? ((top.amount / total) * 100).toFixed(0) : 0}% tổng chi danh mục</div>
+    </div>`
+        : ""
+    }
+
+    <div class="cd-list">
+      ${items
+        .map((e) => {
+          const pct = total > 0 ? ((e.amount / total) * 100).toFixed(0) : 0;
+          return `
+        <div class="cd-item">
+          <div class="cd-item-main">
+            <div class="cd-item-note">${escHtml(e.note)}</div>
+            <div class="cd-item-date">${fmtDate(e.date)}</div>
+          </div>
+          <div class="cd-item-right">
+            <div class="cd-item-amount">${fmtExact(e.amount)}</div>
+            <div class="cd-item-bar-track"><div class="cd-item-bar-fill" style="width:${pct}%;background:${catColor(category)}"></div></div>
+          </div>
+        </div>`;
+        })
+        .join("")}
+    </div>
+  `;
+
+  openSheetById("catDetailSheet");
+}
+
+function openSheetById(id) {
+  document.getElementById("overlay").classList.add("open");
+  document.getElementById(id).classList.add("open");
 }
 
 function renderList() {
@@ -982,7 +1065,7 @@ function renderStats() {
             sorted
               .map(
                 ([cat, amt]) => `
-          <div class="stat-row">
+          <div class="stat-row cat-clickable" onclick="openCatDetail(${JSON.stringify(cat)}, ${JSON.stringify(m)})" role="button" tabindex="0">
             <div class="sr-left">${catEmoji(cat)} ${escHtml(cat)}</div>
             <div class="sr-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
               <span>${fmt(amt)}</span>
