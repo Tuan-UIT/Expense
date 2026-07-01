@@ -40,6 +40,8 @@ let fabOpen      = false;
 let _editingId   = null;  // id đang sửa, null = đang thêm mới
 let selectedMonth = null; // tháng đang xem trong trang Thống kê ("YYYY-MM"), gán ở INIT
 let selectedYear  = null; // năm đang xem trong khối tổng hợp theo năm, gán ở INIT
+let selectedQuarterYear = null;  // năm của quý đang xem, gán ở INIT
+let selectedQuarter     = null;  // quý đang xem (1-4), gán ở INIT
 
 // ═══════════════════════════════════════════════════════════
 //  INIT
@@ -47,6 +49,8 @@ let selectedYear  = null; // năm đang xem trong khối tổng hợp theo năm,
 window.addEventListener("load", () => {
   selectedMonth = thisMonthStr();
   selectedYear  = new Date().getFullYear();
+  selectedQuarterYear = new Date().getFullYear();
+  selectedQuarter     = Math.floor(new Date().getMonth() / 3) + 1;
   buildCatGrid("catGrid", CATEGORIES, "selectExpCat");
   buildCatGrid("incomeCatGrid", INCOME_CATEGORIES, "selectIncCat");
   setTodayDate("inputDate");
@@ -606,6 +610,16 @@ function changeStatsYear(delta) {
   renderStats();
 }
 
+function changeStatsQuarter(delta) {
+  let q = selectedQuarter + delta;
+  let y = selectedQuarterYear;
+  if (q < 1) { q = 4; y -= 1; }
+  else if (q > 4) { q = 1; y += 1; }
+  selectedQuarter     = q;
+  selectedQuarterYear = y;
+  renderStats();
+}
+
 function renderStats() {
   const m         = selectedMonth;
   const isCurrentMonth = m === thisMonthStr();
@@ -655,6 +669,28 @@ function renderStats() {
     : "= Bằng tuần trước";
   const trendColor = trend === null ? "var(--muted)"
     : trend > 0 ? "var(--red)" : trend < 0 ? "var(--green)" : "var(--blue)";
+
+  const qy         = selectedQuarterYear;
+  const q          = selectedQuarter;
+  const qStartMo   = (q - 1) * 3 + 1;
+  const qMonthRows = [];
+  for (let i = 0; i < 3; i++) {
+    const mm = String(qStartMo + i).padStart(2, "0");
+    const prefix = `${qy}-${mm}`;
+    const mExp = activeExp.filter(e => e.date.startsWith(prefix)).reduce((s, e) => s + e.amount, 0);
+    const mInc = activeInc.filter(e => e.date.startsWith(prefix)).reduce((s, e) => s + e.amount, 0);
+    qMonthRows.push({ month: qStartMo + i, exp: mExp, inc: mInc, balance: mInc - mExp });
+  }
+  const qExpTotal   = qMonthRows.reduce((s, r) => s + r.exp, 0);
+  const qIncTotal   = qMonthRows.reduce((s, r) => s + r.inc, 0);
+  const qBalance    = qIncTotal - qExpTotal;
+  const hasQData    = qExpTotal > 0 || qIncTotal > 0;
+  const qNow        = new Date();
+  const isCurrentQuarter = qy === qNow.getFullYear() && q === Math.floor(qNow.getMonth() / 3) + 1;
+  const qCatTotals  = {};
+  activeExp.filter(e => qMonthRows.some(r => e.date.startsWith(`${qy}-${String(r.month).padStart(2, "0")}`)))
+    .forEach(e => { qCatTotals[e.category] = (qCatTotals[e.category] || 0) + e.amount; });
+  const qSorted = Object.entries(qCatTotals).sort((a, b) => b[1] - a[1]);
 
   const yr = selectedYear;
   const yPrefix = String(yr);
@@ -786,6 +822,45 @@ function renderStats() {
     </div>
 
     <div class="stat-block">
+      <div class="block-label">Tổng hợp theo quý</div>
+      <div class="year-switcher">
+        <button class="month-nav-btn" onclick="changeStatsQuarter(-1)" aria-label="Quý trước">◀</button>
+        <span class="month-label">Quý ${q}/${qy}${isCurrentQuarter ? " (hiện tại)" : ""}</span>
+        <button class="month-nav-btn" onclick="changeStatsQuarter(1)" aria-label="Quý sau" ${isCurrentQuarter ? "disabled" : ""}>▶</button>
+      </div>
+      ${!hasQData ? '<p style="color:var(--muted);font-size:13px">Chưa có dữ liệu quý này</p>' : `
+      <div class="chart-box" style="height:180px;margin-bottom:12px">
+        <canvas id="chartQuarter"></canvas>
+      </div>
+      <div class="year-table">
+        <div class="year-row year-head">
+          <span>Tháng</span><span>Thu</span><span>Chi</span><span>Còn lại</span>
+        </div>
+        ${qMonthRows.map(r => `
+        <div class="year-row">
+          <span>Th${r.month}</span>
+          <span style="color:var(--green)">${r.inc > 0 ? "+" + fmt(r.inc) : "—"}</span>
+          <span style="color:var(--red)">${r.exp > 0 ? "-" + fmt(r.exp) : "—"}</span>
+          <span style="color:${r.balance >= 0 ? "var(--green)" : "var(--red)"}">${r.balance >= 0 ? "+" : ""}${fmt(Math.abs(r.balance))}</span>
+        </div>`).join("")}
+        <div class="year-row year-total">
+          <span>Tổng</span>
+          <span style="color:var(--green)">+${fmt(qIncTotal)}</span>
+          <span style="color:var(--red)">-${fmt(qExpTotal)}</span>
+          <span style="color:${qBalance >= 0 ? "var(--green)" : "var(--red)"}">${qBalance >= 0 ? "+" : ""}${fmt(Math.abs(qBalance))}</span>
+        </div>
+      </div>
+      ${qSorted.length > 0 ? qSorted.map(([cat, amt]) => `
+        <div class="stat-row">
+          <div class="sr-left">${catEmoji(cat)} ${escHtml(cat)}</div>
+          <div class="sr-right" style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+            <span>${fmt(amt)}</span>
+            <span style="font-size:11px;color:var(--muted)">${qExpTotal > 0 ? ((amt/qExpTotal)*100).toFixed(0) : 0}%</span>
+          </div>
+        </div>`).join("") : ""}`}
+    </div>
+
+    <div class="stat-block">
       <div class="block-label">Tổng hợp theo năm</div>
       <div class="year-switcher">
         <button class="month-nav-btn" onclick="changeStatsYear(-1)" aria-label="Năm trước">◀</button>
@@ -817,7 +892,7 @@ function renderStats() {
     </div>
   `;
 
-  renderStatsCharts({ sorted, grand, last7, monthRows, isCurrentMonth, hasYearData });
+  renderStatsCharts({ sorted, grand, last7, monthRows, isCurrentMonth, hasYearData, qMonthRows, hasQData });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -832,8 +907,8 @@ function destroyChart(key) {
   }
 }
 
-function renderStatsCharts({ sorted, grand, last7, monthRows, isCurrentMonth, hasYearData }) {
-  ["chartCategory", "chartLast7", "chartYear"].forEach(destroyChart);
+function renderStatsCharts({ sorted, grand, last7, monthRows, isCurrentMonth, hasYearData, qMonthRows, hasQData }) {
+  ["chartCategory", "chartLast7", "chartYear", "chartQuarter"].forEach(destroyChart);
   if (typeof Chart === "undefined") return;
 
   const mutedColor = "#8b949e";
@@ -882,6 +957,34 @@ function renderStatsCharts({ sorted, grand, last7, monthRows, isCurrentMonth, ha
           datasets: [
             { label: "Thu", data: last7.map(x => x.inc), backgroundColor: "#3fb950", borderRadius: 4 },
             { label: "Chi", data: last7.map(x => x.exp), backgroundColor: "#f85149", borderRadius: 4 },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: "bottom", labels: { boxWidth: 10, padding: 10, font: { size: 11 } } },
+            tooltip: { callbacks: { label: (item) => ` ${item.dataset.label}: ${fmtExact(item.raw)}` } },
+          },
+          scales: {
+            x: { grid: { display: false } },
+            y: { grid: { color: gridColor }, ticks: { callback: (v) => fmt(v) } },
+          },
+        },
+      });
+    }
+  }
+
+  if (hasQData) {
+    const ctx = document.getElementById("chartQuarter");
+    if (ctx) {
+      _charts.chartQuarter = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: qMonthRows.map(r => `Th${r.month}`),
+          datasets: [
+            { label: "Thu", data: qMonthRows.map(r => r.inc), backgroundColor: "#3fb950", borderRadius: 4 },
+            { label: "Chi", data: qMonthRows.map(r => r.exp), backgroundColor: "#f85149", borderRadius: 4 },
           ],
         },
         options: {
